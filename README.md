@@ -1,194 +1,102 @@
-# ArmNN TFLite Backend
-![GitHub CI](https://github.com/smarter-project/armnn_tflite_backend/actions/workflows/build.yml/badge.svg)
+# LiteRT Backend
 
-The Triton backend for [TFLite](https://www.tensorflow.org/lite) with support for ArmNN acceleration. 
-You can learn more about Triton backends in the [backend
-repo](https://github.com/triton-inference-server/backend). Ask
-questions or report problems on the [issues
-page](https://github.com/triton-inference-server/server/issues).
-This backend is designed to run TFLite Serialized Models
-models using the TFLite runtime.
+The Triton Inference Server backend for [LiteRT](https://github.com/google-ai-edge/LiteRT) (formerly TensorFlow Lite) using the TFLite Interpreter API, with support for USB Coral Edge TPU acceleration.
+You can learn more about Triton backends in the [backend repo](https://github.com/triton-inference-server/backend). Ask questions or report problems on the [issues page](https://github.com/triton-inference-server/server/issues).
+This backend is designed to run `.tflite` serialized models using the LiteRT v2.4 runtime and is compatible with Triton Inference Server 2.75 (`r26.11`).
 
-This backend was developed using the existing [Triton PyTorch Backend](https://github.com/triton-inference-server/pytorch_backend) as reference.
+## Build the LiteRT Backend
 
-This backend is only currently available for **linux arm64** platforms.
+### Prerequisites
+- CMake version **4.0** or newer
+- GCC version **13** or newer (C++20 support required)
+- `rapidjson-dev`, `git`
+- For USB Coral Edge TPU runtime support: `libedgetpu1-std` (or `libedgetpu1-max`)
 
-## Build the ArmNN TFLite Backend
-The ArmNN TFLite backend can be built either integrated with the build process for the [triton server repo](https://github.com/triton-inference-server/server) or it may be built independently using only this repository.
-
-### Build with Triton Build Convenience Script
-The easiest way to get up and running with the triton armnn tflite backend is to build a custom triton docker image using the `build.py` script available in the triton server repo. 
-
-To build a triton server docker image with the armnn tflite backend built in simply run the following command from the root of the server repo:
+Install build dependencies on Ubuntu 24.04:
 ```bash
-./build.py --enable-logging --enable-stats --enable-tracing --enable-metrics --endpoint=http --endpoint=grpc --backend=armnn_tflite
+sudo apt-get update && sudo apt-get install -y rapidjson-dev gcc-13 g++-13 git
+```
+
+To install the Coral Edge TPU runtime (`libedgetpu.so.1`):
+```bash
+echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
+curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/coral-edgetpu.gpg
+sudo apt-get update && sudo apt-get install -y libedgetpu1-std
 ```
 
 ### Build Independently with CMake
-Use a recent cmake to build. First install the required dependencies. Make sure you are using a cmake version greater than 3.18.
-
-```
-$ apt-get install rapidjson-dev scons gcc-9 g++-9
-```
-
-```
-$ mkdir build
-$ cd build
-$ cmake -DCMAKE_INSTALL_PREFIX:PATH=`pwd`/install ..
-$ make install
+```bash
+cmake -S . -B build \
+  -DCMAKE_C_COMPILER=gcc-13 \
+  -DCMAKE_CXX_COMPILER=g++-13 \
+  -DCMAKE_INSTALL_PREFIX:PATH=`pwd`/install
+cmake --build build -j $(nproc) --target install
 ```
 
-The following required Triton repositories will be pulled and used in
-the build. By default the "main" branch/tag will be used for each repo
-but the listed CMake argument can be used to override.
+The following required Triton repositories will be pulled and used in the build. By default the `r26.11` branch (Triton Server 2.75.0) is used for each repo, and the listed CMake arguments can be used to override:
 
-* triton-inference-server/backend: -DTRITON_BACKEND_REPO_TAG=[tag]
-* triton-inference-server/core: -DTRITON_CORE_REPO_TAG=[tag]
-* triton-inference-server/common: -DTRITON_COMMON_REPO_TAG=[tag]
+* `triton-inference-server/backend`: `-DTRITON_BACKEND_REPO_TAG=[tag]`
+* `triton-inference-server/core`: `-DTRITON_CORE_REPO_TAG=[tag]`
+* `triton-inference-server/common`: `-DTRITON_COMMON_REPO_TAG=[tag]`
 
-You can update the version pins for TFLite, [ArmNN](https://github.com/ARM-software/armnn) and [Flatbuffers](https://github.com/google/flatbuffers)) using the following CMake arguments:
+You can configure LiteRT and delegates using the following CMake arguments:
 
-* TFLite tag: -DTFLITE_TAG=[tag]
-* ArmNN version: -DARMNN_VERSION=[version]
-* Flatbuffers version: -DFLATBUFFERS_VERSION=[version]
+* LiteRT tag: `-DLITERT_TAG=[tag]` (default: `v2.4.0`)
+* Coral Edge TPU external delegate: `-DLITERT_ENABLE_EDGETPU=[ON|OFF]` (default: `ON`)
+* RUY library: `-DLITERT_ENABLE_RUY=[ON|OFF]` (default: `ON`)
+
+### Build with Docker
+```bash
+docker build -t triton-litert-backend .
+```
 
 ## Model Repository Structure
-The layout for your model repoitory remains the exact same as for other standard triton backends. Your model name should be set to `model.tflite`. An example model repository layout for ssd_mobilenetv1_coco is shown below:
+The layout for your model repository remains the same as for other standard Triton backends. Your default model filename should be set to `model.tflite`. An example model repository layout for `ssd_mobilenetv1_coco` is shown below:
 ```
-tflite-backend-model-test
-├── ssd_mobilenetv1_coco_armnn
-│   ├── 1
-│   │   └── model.tflite
-│   └── config.pbtxt
+litert-backend-model-repo
+├── ssd_mobilenetv1_coco
+│   ├── 1
+│   │   └── model.tflite
+│   └── config.pbtxt
 ```
 
 ## Runtime Optimizations
-The backend supports both the [ArmNN](https://arm-software.github.io/armnn/latest/delegate.xhtml) and [XNNPACK](https://github.com/google/XNNPACK) TFLite delegates to accelerate inference.
-
-An example model configuration for ssd_mobilenetv1_coco with armnn cpu execution acceleration can be seen below:
-```
-name: "ssd_mobilenetv1_coco_armnn"
-backend: "armnn_tflite"
-max_batch_size: 0
-input [
-  {
-    name: "normalized_input_image_tensor"
-    data_type: TYPE_FP32
-    dims: [ 1, 300, 300, 3 ]
-  }
-]
-output [
-  {
-    name: "TFLite_Detection_PostProcess"
-    data_type: TYPE_FP32
-    dims: [ 1, 10, 4 ]
-  },
-  {
-    name: "TFLite_Detection_PostProcess:1"
-    data_type: TYPE_FP32
-    dims: [ 1, 10 ]
-  },
-  {
-    name: "TFLite_Detection_PostProcess:2"
-    data_type: TYPE_FP32
-    dims: [ 1, 10 ]
-  },
-  {
-    name: "TFLite_Detection_PostProcess:3"
-    data_type: TYPE_FP32
-    dims: [ 1 ]
-  }
-]
-optimization { execution_accelerators {
-  cpu_execution_accelerator : [ { name : "armnn" } ]
-}}
-```
-
-To use xnnpack acceleration in the above example, you would simply replace `armnn` with `xnnpack`
-
-For gpu acceleration on Mali platforms the ArmNN delegate can be used. To specify gpu acceleration with ArmNN in a model configuration use:
-```
-optimization { execution_accelerators {
-  gpu_execution_accelerator : [ { name : "armnn" } ]
-}}
-```
-
-To use both cpu and gpu acceleration when available we would have:
-```
-optimization { execution_accelerators {
-  cpu_execution_accelerator : [ { name : "armnn" } ]
-  gpu_execution_accelerator : [ { name : "armnn" } ]
-}}
-```
+By default, the backend uses the standard LiteRT Interpreter without any accelerators.
+To accelerate quantized models on a [Google Coral Edge TPU](https://coral.ai/docs/accelerator/get-started/), use `tpu_execution_accelerator`.
 
 ### Default Optimization Options
-Optimization parameters for the default tflite interpreter can be passed using the `parameters` section of the model configuration.
+Optimization parameters for the default LiteRT interpreter can be passed using the `parameters` section of the model configuration.
 
-By default the tflite interpreter will use the maximum number of threads available to the system. 
-To set the number to threads available to the tflite interpreter you can add the following section to your model configuration:
-```
+By default the LiteRT interpreter will use the maximum number of threads available to the system.
+To set the number of threads available to the LiteRT interpreter, add the following section to your model configuration:
+```protobuf
 parameters: {
-key: "tflite_num_threads"
-value: {
-string_value:"<num_threads>"
+  key: "litert_num_threads"
+  value: {
+    string_value: "<num_threads>"
+  }
 }
-}
 ```
 
-### ArmNN Delegate Optimization Options
-Users also have the ability to specify ArmNN specific optimizations. 
-The following options are available for CPU:
-```
+### USB Coral Edge TPU Delegate Optimization Options
+To accelerate Edge TPU-compiled INT8 `.tflite` models on a USB Coral Edge TPU accelerator, configure the `edgetpu` execution accelerator under `tpu_execution_accelerator`:
+```protobuf
 optimization { execution_accelerators {
-  cpu_execution_accelerator : [ {
-    name : "armnn"
-    parameters { key: "num_threads" value: "<num threads>" }
-    parameters { key: "reduce_fp32_to_fp16" value: "<on/off>" }
-    parameters { key: "reduce_fp32_to_bf16" value: "<on/off>" }
-    parameters { key: "fast_math_enabled" value: "<on/off>" }
-  }]
-}}
-```
-And the following options are available for MALI GPU acceleration:
-```
-optimization { execution_accelerators {
-  gpu_execution_accelerator : [ {
-    name : "armnn"
-    parameters { key: "reduce_fp32_to_fp16" value: "<on/off>" }
-    parameters { key: "reduce_fp32_to_bf16" value: "<on/off>" }
-    parameters { key: "fast_math_enabled" value: "<on/off>" }
+  tpu_execution_accelerator : [ {
+    name : "edgetpu"
+    parameters { key: "device" value: "usb" }
+    parameters { key: "lib_path" value: "libedgetpu.so.1" }
+    parameters { key: "performance" value: "Max" }
   }]
 }}
 ```
 
-### XNNPACK Delegate Optimization Options
-Users also have the ability to specify XNNPACK specific optimizations. 
-```
-optimization { execution_accelerators {
-  cpu_execution_accelerator : [ {
-    name : "xnnpack"
-    parameters { key: "num_threads" value: "<num threads>" }
-  }]
-}}
-```
+Available `edgetpu` parameters (all optional):
+* `device`: Edge TPU device specifier (default: `"usb"`). Examples: `"usb"`, `"usb:0"`, `"usb:1"`, `"pci"`, `"pci:0"`.
+* `lib_path`: Path or shared library name for the Edge TPU delegate (default: `"libedgetpu.so.1"`).
+* `performance`: Clock performance mode (`"Max"`, `"High"`, `"Medium"`, or `"Low"`).
 
-## Running ArmNN TFLite Backend on MALI GPU
-The best way to run the ArmNN TFLite backend on a platform with a MALI GPU is via Docker. For example on a hikey 970, we can run the following after building our custom tritonserver image using the command from the build with convenience script above:
-```
-docker run --rm -it --device /dev/mali0 -v /usr/lib/aarch64-linux-gnu/libmali.so:/usr/lib/aarch64-linux-gnu/libmali.so -v <full path to your model repo on host>:/models -p 8000:8000 -p 8001:8001 -p 8002:8002 tritonserver:latest
-```
-Then from inside the container you can invoke the server by running:
-```
-tritonserver --model-repository /models
-```
-
-In addition you must ensure that your instance type is set to GPU like the following:
-```
-instance_group [
-    {
-      count: 1
-      kind: KIND_GPU
-      gpus: [ 0 ]
-    }
-]
+When running inside Docker with a USB Coral Edge TPU, pass the USB bus device to the container:
+```bash
+docker run --rm -it --device /dev/bus/usb -v <full path to your model repo on host>:/models -p 8000:8000 -p 8001:8001 -p 8002:8002 tritonserver:latest
 ```

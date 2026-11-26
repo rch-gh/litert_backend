@@ -5,7 +5,7 @@ import pytest
 
 from tritonclient.utils import InferenceServerException
 
-from helpers.triton_model_config import Model, TFLiteTritonModel
+from helpers.triton_model_config import Model, LiteRTTritonModel
 from helpers.helper_functions import (
     load_model,
 )
@@ -14,7 +14,7 @@ from helpers.helper_functions import (
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input_xxx", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
@@ -23,7 +23,7 @@ from helpers.helper_functions import (
 )
 def test_incorrect_input_name(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -35,7 +35,7 @@ def test_incorrect_input_name(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP_xxx", "TYPE_FP32", [1])],
@@ -44,7 +44,7 @@ def test_incorrect_input_name(
 )
 def test_incorrect_output_name(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -56,7 +56,7 @@ def test_incorrect_output_name(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [
                 Model.TensorIO("X_input", "TYPE_FP32", [1]),
@@ -68,7 +68,7 @@ def test_incorrect_output_name(
 )
 def test_extra_input(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -80,7 +80,7 @@ def test_extra_input(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [
@@ -92,7 +92,7 @@ def test_extra_input(
 )
 def test_extra_output(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -104,12 +104,12 @@ def test_extra_output(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_INT32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
         ),
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_INT32", [1])],
@@ -118,7 +118,7 @@ def test_extra_output(
 )
 def test_incorrect_datatypes(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -130,7 +130,7 @@ def test_incorrect_datatypes(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [5])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [5])],
@@ -139,7 +139,7 @@ def test_incorrect_datatypes(
 )
 def test_incorrect_shapes(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(
@@ -151,59 +151,31 @@ def test_incorrect_shapes(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            tflite_num_threads=-2,
+            litert_num_threads=-2,
         ),
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=True,
-            armnn_cpu_parameters={"invalid_name": 3},
+            edgetpu=True,
+            edgetpu_parameters={"invalid_name": 3},
         ),
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=True,
-            armnn_cpu_parameters={"num_threads": -2},
-        ),
-        TFLiteTritonModel(
-            "add",
-            [Model.TensorIO("X_input", "TYPE_FP32", [1])],
-            [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=True,
-            armnn_cpu_parameters={"reduce_fp32_to_fp16": -2},
-        ),
-        TFLiteTritonModel(
-            "add",
-            [Model.TensorIO("X_input", "TYPE_FP32", [1])],
-            [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=True,
-            armnn_cpu_parameters={"reduce_fp32_to_bf16": -2},
-        ),
-        TFLiteTritonModel(
-            "add",
-            [Model.TensorIO("X_input", "TYPE_FP32", [1])],
-            [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=True,
-            armnn_cpu_parameters={"fast_math_enabled": -2},
-        ),
-        TFLiteTritonModel(
-            "add",
-            [Model.TensorIO("X_input", "TYPE_FP32", [1])],
-            [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            xnnpack=True,
-            xnnpack_parameters={"invalid_name": 3},
+            edgetpu=True,
+            edgetpu_parameters={"performance": "Invalid"},
         ),
     ],
 )
 def test_invalid_runtime_params(
     tritonserver_client,
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
 ):
     with pytest.raises(InferenceServerException):
         load_model(

@@ -87,24 +87,7 @@ def grpc_port(worker_id, free_ports):
 
 @pytest.fixture(autouse=True)
 def validate_model(request):
-    if "model_config" in request.fixturenames:
-        if (
-            os.uname().machine != "aarch64"
-            and request.getfixturevalue("model_config").armnn_cpu
-        ):
-            pytest.xfail("ArmNN acceleration only supported on aarch64")
-
-    if "model_configs" in request.fixturenames:
-        for model_config in request.getfixturevalue("model_configs"):
-            if os.uname().machine != "aarch64" and model_config.armnn_cpu:
-                pytest.xfail("ArmNN acceleration only supported on aarch64")
-
-            if model_config.xnnpack or model_config.armnn_cpu:
-                for input in model_config.inputs:
-                    if -1 in input.dims[1:]:
-                        pytest.xfail(
-                            "XNNPACK/ArmNN not supported on dynamic sized non-batch dimensions for input tensor shapes"
-                        )
+    pass
 
 
 @pytest.fixture(scope="function")
@@ -264,5 +247,5 @@ def pytest_addoption(parser):
             int(cpu_count() / int(os.getenv("PYTEST_XDIST_WORKER_COUNT", 1))), 1
         ),
         required=False,
-        help="If not specified, number of threads to use for each tflite model",
+        help="If not specified, number of threads to use for each litert model",
     )

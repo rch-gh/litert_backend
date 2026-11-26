@@ -10,7 +10,7 @@ from typing import List
 from statistics import stdev, mean
 import numpy as np
 
-from helpers.triton_model_config import Model, TFLiteTritonModel
+from helpers.triton_model_config import Model, LiteRTTritonModel
 from helpers.helper_functions import (
     load_model,
     send_inference_request,
@@ -50,49 +50,14 @@ def get_inference_threads_cpu_percent(
     "model_configs",
     [
         [
-            TFLiteTritonModel(
+            LiteRTTritonModel(
                 "resnet_v2_101_fp32",
                 [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
                 [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
             )
         ],
         [
-            TFLiteTritonModel(
-                "resnet_v2_101_fp32",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
-                [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
-                armnn_cpu=True,
-            )
-        ],
-        [
-            TFLiteTritonModel(
-                "resnet_v2_101_fp32",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
-                [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
-                xnnpack=True,
-            )
-        ],
-        [
-            TFLiteTritonModel(
-                "resnet_v2_101_fp32",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
-                [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
-            ),
-            TFLiteTritonModel(
-                "mobilenet_v2_1.0_224",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 224, 224, 3])],
-                [
-                    Model.TensorIO(
-                        "MobilenetV2/Predictions/Reshape_1",
-                        "TYPE_FP32",
-                        [1, 1001],
-                    )
-                ],
-                armnn_cpu=True,
-            ),
-        ],
-        [
-            TFLiteTritonModel(
+            LiteRTTritonModel(
                 "inceptionv3",
                 [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
                 [
@@ -102,32 +67,11 @@ def get_inference_threads_cpu_percent(
                         [1, 1001],
                     ),
                 ],
-                xnnpack=True,
             ),
-            TFLiteTritonModel(
+            LiteRTTritonModel(
                 "resnet_v2_101_fp32",
                 [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
                 [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
-            ),
-        ],
-        [
-            TFLiteTritonModel(
-                "resnet_v2_101_fp32",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
-                [Model.TensorIO("output", "TYPE_FP32", [1, 1001])],
-                armnn_cpu=True,
-            ),
-            TFLiteTritonModel(
-                "inceptionv3",
-                [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
-                [
-                    Model.TensorIO(
-                        "InceptionV3/Predictions/Reshape_1",
-                        "TYPE_FP32",
-                        [1, 1001],
-                    ),
-                ],
-                armnn_cpu=True,
             ),
         ],
     ],
@@ -143,11 +87,6 @@ def test_correct_thread_count(
 ):
     if tritonserver_client.module != httpclient:
         pytest.skip("Thread count test only runs for http client")
-
-    if len(model_configs) > 1 and all(
-        [model_config.armnn_cpu for model_config in model_configs]
-    ):
-        pytest.xfail("Multiple ArmNN models will end up sharing same threads")
 
     triton_process = psutil.Process(tritonserver_client.triton_pid)
 
@@ -182,7 +121,7 @@ def test_correct_thread_count(
         )
         print(sorted_percents)
 
-        # Assert the proportional cpu usage is mostly spent on the tflite inference threads
+        # Assert the proportional cpu usage is mostly spent on the litert inference threads
         top_percents = [*sorted_percents.values()][:num_threads]
         if num_threads > 1:
             relative_std_err = (

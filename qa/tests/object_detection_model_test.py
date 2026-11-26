@@ -7,7 +7,7 @@ from collections import defaultdict
 
 from itertools import product
 
-from helpers.triton_model_config import Model, TFLiteTritonModel
+from helpers.triton_model_config import Model, LiteRTTritonModel
 from helpers.image_helper import extract_photo
 from helpers.helper_functions import is_server_ready
 
@@ -62,7 +62,7 @@ def object_detection_net(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "ssd_mobilenet_v1_coco",
             [
                 Model.TensorIO(
@@ -91,10 +91,7 @@ def object_detection_net(
                     [1],
                 ),
             ],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for armnn_on, xnnpack_on in list(product([True, False], repeat=2))
     ],
 )
 @pytest.mark.parametrize(

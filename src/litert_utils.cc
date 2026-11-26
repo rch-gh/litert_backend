@@ -1,9 +1,11 @@
-#include "tflite_utils.h"
+#include "litert_utils.h"
 
-namespace triton { namespace backend { namespace tensorflowlite {
+#include <cstring>
+
+namespace triton { namespace backend { namespace litert {
 
 TRITONSERVER_DataType
-ConvertTFLiteTypeToDataType(const TfLiteType ttype)
+ConvertLiteRTTypeToDataType(const TfLiteType ttype)
 {
   switch (ttype) {
     case kTfLiteBool:
@@ -32,7 +34,7 @@ ConvertTFLiteTypeToDataType(const TfLiteType ttype)
 }
 
 std::pair<bool, TfLiteType>
-ConvertDataTypeToTFLiteType(const TRITONSERVER_DataType dtype)
+ConvertDataTypeToLiteRTType(const TRITONSERVER_DataType dtype)
 {
   TfLiteType type = kTfLiteInt32;
   switch (dtype) {
@@ -75,7 +77,7 @@ ConvertDataTypeToTFLiteType(const TRITONSERVER_DataType dtype)
 }
 
 std::pair<bool, TfLiteType>
-ModelConfigDataTypeToTFLiteType(const std::string& data_type_str)
+ModelConfigDataTypeToLiteRTType(const std::string& data_type_str)
 {
   TfLiteType type = kTfLiteInt32;
 
@@ -111,4 +113,4 @@ ModelConfigDataTypeToTFLiteType(const std::string& data_type_str)
   return std::make_pair(true, type);
 }
 
-}}}  // namespace triton::backend::tensorflowlite
+}}}  // namespace triton::backend::litert

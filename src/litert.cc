@@ -5,6 +5,7 @@
 
 #include <stdint.h>
 
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <limits>
@@ -12,7 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "tflite_utils.h"
+#include "litert_utils.h"
 #include "triton/backend/backend_common.h"
 #include "triton/backend/backend_input_collector.h"
 #include "triton/backend/backend_memory.h"
@@ -21,24 +22,18 @@
 #include "triton/backend/backend_output_responder.h"
 #include "triton/core/tritonbackend.h"
 
-// TFLite headers
-#include "tensorflow/lite/delegates/xnnpack/xnnpack_delegate.h"
-#include "tensorflow/lite/interpreter.h"
-#include "tensorflow/lite/kernels/register.h"
-#include "tensorflow/lite/model.h"
-#include "tensorflow/lite/type_to_tflitetype.h"
-
-#ifdef ARMNN_DELEGATE_ENABLE
-// ArmNN headers
-#include "armnn/ArmNN.hpp"
-#include "armnn_delegate.hpp"
-#endif  // ARMNN_DELEGATE_ENABLE
+// LiteRT (TFLite Interpreter API) headers
+#include "tflite/delegates/external/external_delegate.h"
+#include "tflite/interpreter.h"
+#include "tflite/kernels/register.h"
+#include "tflite/model.h"
+#include "tflite/type_to_tflitetype.h"
 
 //
-// TFLite Backend that implements the TRITONBACKEND API.
+// LiteRT Backend that implements the TRITONBACKEND API.
 //
 
-namespace triton { namespace backend { namespace tensorflowlite {
+namespace triton { namespace backend { namespace litert {
 
 //
 // ModelState
@@ -50,13 +45,12 @@ namespace triton { namespace backend { namespace tensorflowlite {
 class ModelState : public BackendModel {
  public:
   static TRITONSERVER_Error* Create(
-      TRITONBACKEND_Model* triton_model, ModelState** state,
-      int32_t* armnn_threads);
+      TRITONBACKEND_Model* triton_model, ModelState** state);
   virtual ~ModelState() = default;
 
-  // Load a serialized tflite model using 'artifact_name' as the name for the
-  // tflite model file. Return in 'model_path' the full path to the
-  // tflite model file. Return in 'model' the TFLite network,
+  // Load a serialized LiteRT model using 'artifact_name' as the name for the
+  // model file. Return in 'model_path' the full path to the
+  // model file. Return in 'model' the LiteRT FlatBufferModel,
   // representing the model.
   TRITONSERVER_Error* LoadModel(
       const std::string& artifact_name, std::string* model_path,
@@ -66,29 +60,20 @@ class ModelState : public BackendModel {
   // Validate that model configuration is supported by this backend.
   TRITONSERVER_Error* ValidateModelConfig();
 
-  // Default TFLite runtime options
-  int32_t tflite_num_threads_ =
+  // Default LiteRT runtime options
+  int32_t litert_num_threads_ =
       static_cast<int32_t>(std::thread::hardware_concurrency());
 
-#ifdef ARMNN_DELEGATE_ENABLE
-  // ArmNN Delegate options
-  bool use_armnn_delegate_cpu_ = false;
-  bool use_armnn_delegate_gpu_ = false;
-  armnn::OptimizerOptions armnn_optimizer_options_cpu_;
-  armnn::OptimizerOptions armnn_optimizer_options_gpu_;
-  int32_t* armnn_threads_;
-#endif  // ARMNN_DELEGATE_ENABLE
-
-  // XNNPACK Delegate options
-  bool use_xnnpack_delegate_ = false;
-  int32_t num_threads_xnnpack_ =
-      static_cast<int32_t>(std::thread::hardware_concurrency());
+  // USB Coral Edge TPU Delegate options
+  bool use_edgetpu_delegate_ = false;
+  std::string edgetpu_lib_path_ = "libedgetpu.so.1";
+  std::string edgetpu_device_ = "usb";
+  std::string edgetpu_performance_;
 
   // Map from configuration name for an input to the index of
   // that input in the model.
   std::unordered_map<std::string, int> input_index_map_;
   std::unordered_map<std::string, TRITONSERVER_DataType> input_dtype_map_;
-
 
   // Map from configuration name for an output to the index of
   // that output in the model.
@@ -102,9 +87,7 @@ class ModelState : public BackendModel {
 
 
 TRITONSERVER_Error*
-ModelState::Create(
-    TRITONBACKEND_Model* triton_model, ModelState** state,
-    int32_t* armnn_threads)
+ModelState::Create(TRITONBACKEND_Model* triton_model, ModelState** state)
 {
   try {
     *state = new ModelState(triton_model);
@@ -116,18 +99,12 @@ ModelState::Create(
     RETURN_IF_ERROR(ex.err_);
   }
 
-#ifdef ARMNN_DELEGATE_ENABLE
-  (*state)->armnn_threads_ = armnn_threads;
-#endif
-
   return nullptr;  // success
 }
 
 ModelState::ModelState(TRITONBACKEND_Model* triton_model)
     : BackendModel(triton_model)
-{  // Here we can add information to the model state that can be shared across
-   // model instances. See onnx backend for example. MALI GPU optimization level
-   // may be candidate.
+{
 }
 
 TRITONSERVER_Error*
@@ -136,7 +113,7 @@ ModelState::LoadModel(
     common::TritonJson::Value& model_config,
     std::unique_ptr<tflite::FlatBufferModel>* model)
 {
-  // Find the TFLite model file that describes the model. If the model
+  // Find the LiteRT model file that describes the model. If the model
   // configuration doesn't have an explicit model file specified then
   // use the default name ("model.tflite").
   std::string cc_model_filename = artifact_name;
@@ -156,7 +133,7 @@ ModelState::LoadModel(
             "' for model instance '" + Name() + "'");
   }
 
-  // Load the Tflite FlatBufferModel into memory
+  // Load the LiteRT FlatBufferModel into memory
   *model = tflite::FlatBufferModel::BuildFromFile((*model_path).c_str());
 
   if (!*model) {
@@ -165,15 +142,15 @@ ModelState::LoadModel(
         ("failed to load model " + Name()).c_str());
   }
 
-  // Handle tflite default interpeter options set in parameters
+  // Handle LiteRT default interpreter options set in parameters
   {
     triton::common::TritonJson::Value params;
     if (ModelConfig().Find("parameters", &params)) {
-      // Handle tflite_num_threads parameter
+      // Handle litert_num_threads parameter
       std::string value_str;
-      auto err = GetParameterValue(params, "tflite_num_threads", &value_str);
+      auto err = GetParameterValue(params, "litert_num_threads", &value_str);
 
-      // tflite_num_threads is not required so clear error if not found
+      // litert_num_threads is not required so clear error if not found
       if (err != nullptr) {
         if (TRITONSERVER_ErrorCode(err) != TRITONSERVER_ERROR_NOT_FOUND) {
           return err;
@@ -181,14 +158,14 @@ ModelState::LoadModel(
           TRITONSERVER_ErrorDelete(err);
         }
       } else {
-        RETURN_IF_ERROR(ParseIntValue(value_str, &tflite_num_threads_));
+        RETURN_IF_ERROR(ParseIntValue(value_str, &litert_num_threads_));
 
-        if (tflite_num_threads_ < 0) {
+        if (litert_num_threads_ < 0) {
           return TRITONSERVER_ErrorNew(
               TRITONSERVER_ERROR_INVALID_ARG,
               (std::string(
-                   "parameter 'tflite_num_threads' must be non-negative "
-                   "number for tflite model '") +
+                   "parameter 'litert_num_threads' must be non-negative "
+                   "number for litert model '") +
                Name() + "'")
                   .c_str());
         }
@@ -196,7 +173,7 @@ ModelState::LoadModel(
     }
   }
 
-  // Handle tflite optimizations from model config
+  // Handle LiteRT optimizations from model config
   {
     triton::common::TritonJson::Value optimization;
     if (ModelConfig().Find("optimization", &optimization)) {
@@ -204,133 +181,34 @@ ModelState::LoadModel(
       if (optimization.Find("execution_accelerators", &eas)) {
         triton::common::TritonJson::Value cpu_eas;
         if (eas.Find("cpu_execution_accelerator", &cpu_eas)) {
-          for (size_t ea_idx = 0; ea_idx < cpu_eas.ArraySize(); ea_idx++) {
+          if (cpu_eas.ArraySize() > 0) {
             triton::common::TritonJson::Value ea;
-            RETURN_IF_ERROR(cpu_eas.IndexAsObject(ea_idx, &ea));
+            RETURN_IF_ERROR(cpu_eas.IndexAsObject(0, &ea));
+            std::string name;
+            RETURN_IF_ERROR(ea.MemberAsString("name", &name));
+            return TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INVALID_ARG,
+                (std::string("unknown CPU Execution Accelerator '") + name +
+                 "' is requested")
+                    .c_str());
+          }
+        }
+
+        triton::common::TritonJson::Value tpu_eas;
+        if (eas.Find("tpu_execution_accelerator", &tpu_eas)) {
+          for (size_t ea_idx = 0; ea_idx < tpu_eas.ArraySize(); ea_idx++) {
+            triton::common::TritonJson::Value ea;
+            RETURN_IF_ERROR(tpu_eas.IndexAsObject(ea_idx, &ea));
             std::string name;
             RETURN_IF_ERROR(ea.MemberAsString("name", &name));
 
-#ifdef ARMNN_DELEGATE_ENABLE
-            if (name == "armnn") {
-              use_armnn_delegate_cpu_ = true;
+            if (name == "edgetpu") {
+              use_edgetpu_delegate_ = true;
               LOG_MESSAGE(
                   TRITONSERVER_LOG_VERBOSE,
                   (std::string(
-                       "ArmNN Delegate Execution Accelerator is set for '") +
-                   Name() + "' on CPU")
-                      .c_str());
-
-              // Validate and set parameters
-              triton::common::TritonJson::Value params;
-              if (ea.Find("parameters", &params)) {
-                std::vector<std::string> param_keys;
-                RETURN_IF_ERROR(params.Members(&param_keys));
-                for (const auto& param_key : param_keys) {
-                  std::string value_string;
-                  if (param_key == "reduce_fp32_to_fp16") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn_optimizer_options_cpu_.m_ReduceFp32ToFp16 = true;
-                    } else if (value_string == "off") {
-                      armnn_optimizer_options_cpu_.m_ReduceFp32ToFp16 = false;
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for reduce_fp32_to_fp16. '") +
-                              value_string + "' is requested");
-                    }
-                  } else if (param_key == "reduce_fp32_to_bf16") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn_optimizer_options_cpu_.m_ReduceFp32ToBf16 = true;
-                    } else if (value_string == "off") {
-                      armnn_optimizer_options_cpu_.m_ReduceFp32ToBf16 = false;
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for reduce_fp32_to_bf16. '") +
-                              value_string + "' is requested");
-                    }
-                  } else if (param_key == "fast_math_enabled") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn::BackendOptions option(
-                          "CpuAcc", {{"FastMathEnabled", true}});
-                      armnn_optimizer_options_cpu_.m_ModelOptions.push_back(
-                          option);
-                    } else if (value_string == "off") {
-                      armnn::BackendOptions option(
-                          "CpuAcc", {{"FastMathEnabled", false}});
-                      armnn_optimizer_options_cpu_.m_ModelOptions.push_back(
-                          option);
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for fast_math_enabled. '") +
-                              value_string + "' is requested");
-                    }
-                  } else if (param_key == "num_threads") {
-                    int32_t num_threads;
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    RETURN_IF_ERROR(ParseIntValue(value_string, &num_threads));
-                    if (num_threads < 0) {
-                      return TRITONSERVER_ErrorNew(
-                          TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "armnn thread count '" + value_string +
-                              "' is not in range [1-64]")
-                              .c_str());
-                    }
-
-                    // Here we do an ugly hack to prevent armnn/acl thread
-                    // issues For now we make sure the next armnn accelerated
-                    // model loaded does not request more threads than the
-                    // previous, as this creates a segfault
-                    if (num_threads > *armnn_threads_) {
-                      num_threads = *armnn_threads_;
-                      LOG_MESSAGE(
-                          TRITONSERVER_LOG_INFO,
-                          (std::string("Model threads requested larger than "
-                                       "that of first model loaded: ") +
-                           value_string + " > " +
-                           std::to_string(*armnn_threads_) +
-                           ". Using smaller thread value instead.")
-                              .c_str());
-                    } else {
-                      *armnn_threads_ = num_threads;
-                    }
-                    armnn::BackendOptions option(
-                        "CpuAcc", {{"NumberOfThreads",
-                                    static_cast<unsigned int>(num_threads)}});
-                    armnn_optimizer_options_cpu_.m_ModelOptions.push_back(
-                        option);
-                  } else {
-                    return TRITONSERVER_ErrorNew(
-                        TRITONSERVER_ERROR_INVALID_ARG,
-                        std::string(
-                            "unknown parameter '" + param_key +
-                            "' is provided for ArmNN CPU Acceleration")
-                            .c_str());
-                  }
-                }
-              }
-            } else if (name == "xnnpack") {
-#else
-            if (name == "xnnpack") {
-#endif  // ARMNN_DELEGATE_ENABLE
-              use_xnnpack_delegate_ = true;
-              LOG_MESSAGE(
-                  TRITONSERVER_LOG_VERBOSE,
-                  (std::string(
-                       "XNNPACK Delegate Execution Accelerator is set for '") +
-                   Name() + "' on CPU")
+                       "Coral Edge TPU Delegate Execution Accelerator is set for '") +
+                   Name() + "' on TPU")
                       .c_str());
               // Validate and set parameters
               triton::common::TritonJson::Value params;
@@ -339,17 +217,34 @@ ModelState::LoadModel(
                 RETURN_IF_ERROR(params.Members(&param_keys));
                 for (const auto& param_key : param_keys) {
                   std::string value_string;
-                  if (param_key == "num_threads") {
+                  if (param_key == "lib_path") {
                     RETURN_IF_ERROR(params.MemberAsString(
                         param_key.c_str(), &value_string));
-                    RETURN_IF_ERROR(
-                        ParseIntValue(value_string, &num_threads_xnnpack_));
+                    edgetpu_lib_path_ = value_string;
+                  } else if (param_key == "device") {
+                    RETURN_IF_ERROR(params.MemberAsString(
+                        param_key.c_str(), &value_string));
+                    edgetpu_device_ = value_string;
+                  } else if (param_key == "performance") {
+                    RETURN_IF_ERROR(params.MemberAsString(
+                        param_key.c_str(), &value_string));
+                    if (value_string == "Max" || value_string == "High" ||
+                        value_string == "Medium" || value_string == "Low") {
+                      edgetpu_performance_ = value_string;
+                    } else {
+                      RETURN_ERROR_IF_FALSE(
+                          false, TRITONSERVER_ERROR_INVALID_ARG,
+                          std::string(
+                              "Please pass Max/High/Medium/Low for "
+                              "performance. '") +
+                              value_string + "' is requested");
+                    }
                   } else {
                     return TRITONSERVER_ErrorNew(
                         TRITONSERVER_ERROR_INVALID_ARG,
                         std::string(
                             "unknown parameter '" + param_key +
-                            "' is provided for XNNPACK Acceleration")
+                            "' is provided for Coral Edge TPU Acceleration")
                             .c_str());
                   }
                 }
@@ -357,106 +252,12 @@ ModelState::LoadModel(
             } else {
               return TRITONSERVER_ErrorNew(
                   TRITONSERVER_ERROR_INVALID_ARG,
-                  (std::string("unknown Execution Accelerator '") + name +
+                  (std::string("unknown TPU Execution Accelerator '") + name +
                    "' is requested")
                       .c_str());
             }
           }
         }
-
-#ifdef ARMNN_DELEGATE_ENABLE
-        // GPU Execution Accelerator is disabled on CPU devices.
-        triton::common::TritonJson::Value gpu_eas;
-        if (eas.Find("gpu_execution_accelerator", &gpu_eas)) {
-          for (size_t ea_idx = 0; ea_idx < gpu_eas.ArraySize(); ea_idx++) {
-            triton::common::TritonJson::Value ea;
-            RETURN_IF_ERROR(gpu_eas.IndexAsObject(ea_idx, &ea));
-            std::string name;
-            RETURN_IF_ERROR(ea.MemberAsString("name", &name));
-            if (name == "armnn") {
-              use_armnn_delegate_gpu_ = true;
-              armnn::OptimizerOptions armnn_optimizer_options_gpu_;
-              LOG_MESSAGE(
-                  TRITONSERVER_LOG_VERBOSE,
-                  (std::string(
-                       "ArmNN Delegate Execution Accelerator is set for '") +
-                   Name() + "' on GPU")
-                      .c_str());
-              // Validate and set parameters
-              triton::common::TritonJson::Value params;
-              if (ea.Find("parameters", &params)) {
-                std::vector<std::string> param_keys;
-                RETURN_IF_ERROR(params.Members(&param_keys));
-                for (const auto& param_key : param_keys) {
-                  std::string value_string;
-                  if (param_key == "reduce_fp32_to_fp16") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn_optimizer_options_gpu_.m_ReduceFp32ToFp16 = true;
-                    } else if (value_string == "off") {
-                      armnn_optimizer_options_gpu_.m_ReduceFp32ToFp16 = false;
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for reduce_fp32_to_fp16. '") +
-                              value_string + "' is requested");
-                    }
-                  } else if (param_key == "reduce_fp32_to_bf16") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn_optimizer_options_gpu_.m_ReduceFp32ToBf16 = true;
-                    } else if (value_string == "off") {
-                      armnn_optimizer_options_gpu_.m_ReduceFp32ToBf16 = false;
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for reduce_fp32_to_bf16. '") +
-                              value_string + "' is requested");
-                    }
-                  } else if (param_key == "fast_math_enabled") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "on") {
-                      armnn::BackendOptions option(
-                          "GpuAcc", {{"FastMathEnabled", true}});
-                      armnn_optimizer_options_gpu_.m_ModelOptions.push_back(
-                          option);
-                    } else if (value_string == "off") {
-                      armnn::BackendOptions option(
-                          "GpuAcc", {{"FastMathEnabled", false}});
-                      armnn_optimizer_options_gpu_.m_ModelOptions.push_back(
-                          option);
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass on/off for fast_math_enabled. '") +
-                              value_string + "' is requested");
-                    }
-                  } else {
-                    return TRITONSERVER_ErrorNew(
-                        TRITONSERVER_ERROR_INVALID_ARG,
-                        std::string(
-                            "unknown parameter '" + param_key +
-                            "' is provided for ArmNN GPU Acceleration")
-                            .c_str());
-                  }
-                }
-              }
-            } else {
-              return TRITONSERVER_ErrorNew(
-                  TRITONSERVER_ERROR_INVALID_ARG,
-                  (std::string("unknown Execution Accelerator '") + name +
-                   "' is requested")
-                      .c_str());
-            }
-          }
-        }
-#endif  // ARMNN_DELEGATE_ENABLE
       }
     }
   }
@@ -490,7 +291,7 @@ ModelState::ValidateModelConfig()
   builder(&interpreter);
   if (!interpreter) {
     return TRITONSERVER_ErrorNew(
-        TRITONSERVER_ERROR_INTERNAL, ("failed to build tflite interpreter "
+        TRITONSERVER_ERROR_INTERNAL, ("failed to build litert interpreter "
                                       "during validation process for model " +
                                       Name())
                                          .c_str());
@@ -507,14 +308,14 @@ ModelState::ValidateModelConfig()
   for (size_t i = 0; i < num_inputs; i++) {
     input_index_map_[interpreter->GetInputName(i)] = inputs[i];
     input_dtype_map_[interpreter->GetInputName(i)] =
-        ConvertTFLiteTypeToDataType(interpreter->tensor(inputs[i])->type);
+        ConvertLiteRTTypeToDataType(interpreter->tensor(inputs[i])->type);
   }
 
   // Populate output name and dtype map
   for (size_t i = 0; i < num_outputs; i++) {
     output_index_map_[interpreter->GetOutputName(i)] = outputs[i];
     output_dtype_map_[interpreter->GetOutputName(i)] =
-        ConvertTFLiteTypeToDataType(interpreter->tensor(outputs[i])->type);
+        ConvertLiteRTTypeToDataType(interpreter->tensor(outputs[i])->type);
   }
 
   triton::common::TritonJson::Value ios;
@@ -543,7 +344,7 @@ ModelState::ValidateModelConfig()
     // Validate data type
     std::string io_dtype;
     RETURN_IF_ERROR(io.MemberAsString("data_type", &io_dtype));
-    const auto pr = ModelConfigDataTypeToTFLiteType(io_dtype);
+    const auto pr = ModelConfigDataTypeToLiteRTType(io_dtype);
     if (!pr.first) {
       return TRITONSERVER_ErrorNew(
           TRITONSERVER_ERROR_INTERNAL,
@@ -566,11 +367,11 @@ ModelState::ValidateModelConfig()
     }
 
     // Validate input shape matches expected from model
-    TfLiteIntArray* tflite_dims = interpreter->tensor(inputs[i])->dims;
+    TfLiteIntArray* litert_dims = interpreter->tensor(inputs[i])->dims;
     std::vector<int64_t> model_input_shape(
-        tflite_dims->data, tflite_dims->data + tflite_dims->size);
+        litert_dims->data, litert_dims->data + litert_dims->size);
 
-    // Sometimes tflite models don't have shape info for input/output encoded
+    // Sometimes LiteRT models don't have shape info for input/output encoded
     if (!model_input_shape.empty()) {
       std::vector<int64_t> config_input_shape;
       triton::common::TritonJson::Value shape;
@@ -580,7 +381,7 @@ ModelState::ValidateModelConfig()
         RETURN_IF_ERROR(ParseShape(io, "dims", &config_input_shape));
       }
       if (max_batch_size_ > 0) {
-        // if batching is supported, you tflite doesn't encode -1 as
+        // if batching is supported, LiteRT doesn't encode -1 as
         // the dim like tf does, it's just a 1. So just insert a 1 as the
         // batch dim for the config input shape to see if it lines up
         config_input_shape.insert(config_input_shape.begin(), 1);
@@ -621,7 +422,7 @@ ModelState::ValidateModelConfig()
     // Validate data type
     std::string io_dtype;
     RETURN_IF_ERROR(io.MemberAsString("data_type", &io_dtype));
-    const auto pr = ModelConfigDataTypeToTFLiteType(io_dtype);
+    const auto pr = ModelConfigDataTypeToLiteRTType(io_dtype);
     if (!pr.first) {
       return TRITONSERVER_ErrorNew(
           TRITONSERVER_ERROR_INTERNAL,
@@ -643,11 +444,11 @@ ModelState::ValidateModelConfig()
     }
 
     // Validate output shape matches expected from model
-    TfLiteIntArray* tflite_dims = interpreter->tensor(outputs[i])->dims;
+    TfLiteIntArray* litert_dims = interpreter->tensor(outputs[i])->dims;
     std::vector<int64_t> model_output_shape(
-        tflite_dims->data, tflite_dims->data + tflite_dims->size);
+        litert_dims->data, litert_dims->data + litert_dims->size);
 
-    // Sometimes tflite models don't have shape info for input/output encoded
+    // Sometimes LiteRT models don't have shape info for input/output encoded
     if (!model_output_shape.empty()) {
       std::vector<int64_t> config_output_shape;
       triton::common::TritonJson::Value shape;
@@ -672,7 +473,7 @@ ModelState::ValidateModelConfig()
   }
 
   return nullptr;  // success
-}  // namespace tensorflowlite
+}
 
 TRITONSERVER_Error*
 ModelState::AutoCompleteConfig()
@@ -681,7 +482,7 @@ ModelState::AutoCompleteConfig()
   LOG_MESSAGE(
       TRITONSERVER_LOG_WARN,
       (std::string("skipping model configuration auto-complete for '") +
-       Name() + "': not supported for tflite backend")
+       Name() + "': not supported for litert backend")
           .c_str());
 
   return nullptr;  // success
@@ -731,13 +532,13 @@ class ModelInstanceState : public BackendModelInstance {
 
   ModelState* model_state_;
 
-  // The full path to the TFLite model file.
+  // The full path to the LiteRT model file.
   std::string model_path_;
 
-  // The pointer to the tflite network
+  // The pointer to the LiteRT network
   std::unique_ptr<tflite::FlatBufferModel> model_;
 
-  // The pointer to the tflite interpreter instance
+  // The pointer to the LiteRT interpreter instance
   std::unique_ptr<tflite::Interpreter> interpreter_;
 
   // State variable to register whether inference has been called at least once
@@ -767,7 +568,7 @@ ModelInstanceState::ModelInstanceState(
     : BackendModelInstance(model_state, triton_model_instance),
       model_state_(model_state)
 {
-  // Load the TFLite network
+  // Load the LiteRT network
   THROW_IF_BACKEND_INSTANCE_ERROR(model_state->LoadModel(
       ArtifactFilename(), &model_path_, model_state->ModelConfig(), &model_));
 
@@ -784,18 +585,18 @@ ModelInstanceState::~ModelInstanceState()
 TRITONSERVER_Error*
 ModelInstanceState::BuildInterpreter()
 {
-  // Build the tflite interpreter
+  // Build the LiteRT interpreter
   tflite::ops::builtin::BuiltinOpResolverWithoutDefaultDelegates resolver;
   tflite::InterpreterBuilder builder(*model_, resolver);
   builder(&interpreter_);
   if (!interpreter_) {
     return TRITONSERVER_ErrorNew(
         TRITONSERVER_ERROR_INTERNAL,
-        ("failed to build tflite interpreter for model " + Name()).c_str());
+        ("failed to build litert interpreter for model " + Name()).c_str());
   }
 
-  // Tell interpreter to use max threads available to system
-  if (interpreter_->SetNumThreads(model_state_->tflite_num_threads_) !=
+  // Tell interpreter to use configured threads
+  if (interpreter_->SetNumThreads(model_state_->litert_num_threads_) !=
       kTfLiteOk) {
     return TRITONSERVER_ErrorNew(
         TRITONSERVER_ERROR_INTERNAL,
@@ -803,72 +604,41 @@ ModelInstanceState::BuildInterpreter()
             .c_str());
   }
 
-#ifdef ARMNN_DELEGATE_ENABLE
-  bool armnn_gpu_delegate_enabled =
-      model_state_->use_armnn_delegate_gpu_ &&
-      Kind() == TRITONSERVER_INSTANCEGROUPKIND_GPU;
-  bool armnn_cpu_delegate_enabled =
-      model_state_->use_armnn_delegate_cpu_ &&
-      Kind() == TRITONSERVER_INSTANCEGROUPKIND_CPU;
-  if (armnn_cpu_delegate_enabled || armnn_gpu_delegate_enabled) {
-    armnnDelegate::DelegateOptions armnn_delegate_options =
-        armnnDelegate::TfLiteArmnnDelegateOptionsDefault();
+  if (model_state_->use_edgetpu_delegate_) {
+    TfLiteExternalDelegateOptions options =
+        TfLiteExternalDelegateOptionsDefault(
+            model_state_->edgetpu_lib_path_.c_str());
 
-    // Set backend prefs based on gpu or cpu selection
-    if (armnn_gpu_delegate_enabled) {
-      armnn_delegate_options.SetBackends(
-          {armnn::Compute::GpuAcc, armnn::Compute::CpuAcc});
-      armnn_delegate_options.SetOptimizerOptions(
-          model_state_->armnn_optimizer_options_gpu_);
-    } else {
-      // Set backend pref to Neon ACL backend
-      armnn_delegate_options.SetBackends({armnn::Compute::CpuAcc});
-      armnn_delegate_options.SetOptimizerOptions(
-          model_state_->armnn_optimizer_options_cpu_);
+    if (!model_state_->edgetpu_device_.empty()) {
+      options.insert(&options, "device", model_state_->edgetpu_device_.c_str());
+    }
+    if (!model_state_->edgetpu_performance_.empty()) {
+      options.insert(
+          &options, "performance", model_state_->edgetpu_performance_.c_str());
     }
 
-    // Create ArmNN Delegate with options registered in model state
-    std::unique_ptr<
-        TfLiteDelegate, decltype(&armnnDelegate::TfLiteArmnnDelegateDelete)>
-        armnn_delegate(
-            armnnDelegate::TfLiteArmnnDelegateCreate(armnn_delegate_options),
-            armnnDelegate::TfLiteArmnnDelegateDelete);
-
-    // Instruct the Interpreter to use the armnnDelegate
-    if (interpreter_->ModifyGraphWithDelegate(std::move(armnn_delegate)) !=
-        kTfLiteOk) {
-      return TRITONSERVER_ErrorNew(
-          TRITONSERVER_ERROR_INTERNAL,
-          ("failed to use armnn delegate for model " + Name()).c_str());
-    }
-    LogDelegation("armnn");
-  } else if (
-      model_state_->use_xnnpack_delegate_ &&
-      Kind() == TRITONSERVER_INSTANCEGROUPKIND_CPU) {
-#else
-  if (model_state_->use_xnnpack_delegate_ &&
-      Kind() == TRITONSERVER_INSTANCEGROUPKIND_CPU) {
-#endif  // ARMNN_DELEGATE_ENABLE
-    // Create the XNNPack Delegate
-    TfLiteXNNPackDelegateOptions options =
-        TfLiteXNNPackDelegateOptionsDefault();
-
-    options.num_threads = model_state_->num_threads_xnnpack_;
-
-    tflite::Interpreter::TfLiteDelegatePtr xnnpack_delegate(
-        TfLiteXNNPackDelegateCreate(&options),
-        [](TfLiteDelegate* xnnpack_delegate) {
-          TfLiteXNNPackDelegateDelete(xnnpack_delegate);
+    tflite::Interpreter::TfLiteDelegatePtr edgetpu_delegate(
+        TfLiteExternalDelegateCreate(&options),
+        [](TfLiteDelegate* delegate) {
+          TfLiteExternalDelegateDelete(delegate);
         });
 
-    // Instruct the Interpreter to use the xnnpack
-    if (interpreter_->ModifyGraphWithDelegate(std::move(xnnpack_delegate)) !=
+    if (!edgetpu_delegate) {
+      return TRITONSERVER_ErrorNew(
+          TRITONSERVER_ERROR_INTERNAL,
+          ("failed to create Coral Edge TPU delegate from '" +
+           model_state_->edgetpu_lib_path_ + "' for model " + Name())
+              .c_str());
+    }
+
+    if (interpreter_->ModifyGraphWithDelegate(std::move(edgetpu_delegate)) !=
         kTfLiteOk) {
       return TRITONSERVER_ErrorNew(
           TRITONSERVER_ERROR_INTERNAL,
-          ("failed to use xnnpack delegate for model " + Name()).c_str());
+          ("failed to use Coral Edge TPU delegate for model " + Name())
+              .c_str());
     }
-    LogDelegation("xnnpack");
+    LogDelegation("edgetpu");
   }
 
   return nullptr;
@@ -906,7 +676,7 @@ ModelInstanceState::LogDelegation(const std::string& delegate_name)
     LOG_MESSAGE(
         TRITONSERVER_LOG_INFO,
         ("Applied " + delegate_name +
-         " delegate, and the model graph will be paritally executed by the "
+         " delegate, and the model graph will be partially executed by the "
          "delegate w/ " +
          std::to_string(num_delegated_kernels) + " delegate kernels.")
             .c_str());
@@ -947,7 +717,7 @@ ModelInstanceState::ProcessRequests(
           TRITONSERVER_ErrorNew(
               TRITONSERVER_ERROR_INTERNAL,
               std::string(
-                  "null request given to TFLite backend for '" + Name() + "'")
+                  "null request given to LiteRT backend for '" + Name() + "'")
                   .c_str()));
       return;
     }
@@ -1026,7 +796,7 @@ ModelInstanceState::ProcessRequests(
   BackendInputCollector collector(
       requests, request_count, &responses, model_state_->TritonMemoryManager(),
       false, nullptr);
-  // Note here we are copying the triton input buffers to the tflite allocated
+  // Note here we are copying the triton input buffers to the LiteRT allocated
   // buffers
   SetInputTensors(
       total_batch_size, requests, request_count, &responses, &collector,
@@ -1061,7 +831,7 @@ ModelInstanceState::ProcessRequests(
       LOG_IF_ERROR(
           TRITONBACKEND_ResponseSend(
               response, TRITONSERVER_RESPONSE_COMPLETE_FINAL, nullptr),
-          "failed to send TFLite backend response");
+          "failed to send LiteRT backend response");
     }
   }
 
@@ -1097,7 +867,7 @@ ModelInstanceState::Execute(
     SendErrorForResponses(
         responses, response_count,
         TRITONSERVER_ErrorNew(
-            TRITONSERVER_ERROR_INTERNAL, ("TFLite execute failure")));
+            TRITONSERVER_ERROR_INTERNAL, ("LiteRT execute failure")));
   }
   first_inference_ = false;
 }
@@ -1145,6 +915,7 @@ ModelInstanceState::SetInputTensors(
                   "Model input: " + std::string(input_name) +
                   " is not a valid input name for '" + Name() + "'")
                   .c_str()));
+      return;
     }
 
     // The shape for the entire input patch, [total_batch_size, ...]
@@ -1166,14 +937,14 @@ ModelInstanceState::SetInputTensors(
     // is different from the last call, tell the interpreter to resize the input
     // tensor and note that we are going to have to make another call to
     // AllocateTensors below
-    std::vector<int32_t> batchn_tflite_size_vector(
+    std::vector<int32_t> batchn_litert_size_vector(
         begin(batchn_shape), end(batchn_shape));
-    TfLiteIntArray* tflite_input_tensor_dims =
+    TfLiteIntArray* litert_input_tensor_dims =
         interpreter_->tensor(model_state_->input_index_map_[input_name])->dims;
-    std::vector<int32_t> tflite_input_shape(
-        tflite_input_tensor_dims->data,
-        (tflite_input_tensor_dims->data + tflite_input_tensor_dims->size));
-    if (batchn_tflite_size_vector != tflite_input_shape) {
+    std::vector<int32_t> litert_input_shape(
+        litert_input_tensor_dims->data,
+        (litert_input_tensor_dims->data + litert_input_tensor_dims->size));
+    if (batchn_litert_size_vector != litert_input_shape) {
       // Resize input tensors based on current total batch size
       allocate_tensors = true;
       LOG_MESSAGE(
@@ -1185,19 +956,20 @@ ModelInstanceState::SetInputTensors(
               .c_str());
       interpreter_->ResizeInputTensor(
           model_state_->input_index_map_[input_name],
-          batchn_tflite_size_vector);
+          batchn_litert_size_vector);
     }
   }
 
   // Once we have resized all input tensors in the loop above,
-  // now we can allocate the memory plan within the tflite runtime if necessary
+  // now we can allocate the memory plan within the LiteRT runtime if necessary
   if (allocate_tensors || first_inference_) {
     if (interpreter_->AllocateTensors() != kTfLiteOk) {
       SendErrorForResponses(
           responses, request_count,
           TRITONSERVER_ErrorNew(
               TRITONSERVER_ERROR_INTERNAL,
-              "TfLite interpreter failed to allocate tensor inputs"));
+              "LiteRT interpreter failed to allocate tensor inputs"));
+      return;
     }
   }
 
@@ -1215,26 +987,24 @@ ModelInstanceState::SetInputTensors(
         TRITONBACKEND_InputProperties(
             input, &input_name, nullptr, nullptr, nullptr, nullptr, nullptr));
 
-    // Even if running on MALI GPU, we use CPU memory
-    std::vector<std::pair<TRITONSERVER_MemoryType, int64_t>> alloc_perference;
-    alloc_perference = {{TRITONSERVER_MEMORY_CPU, 0}};
+    std::vector<std::pair<TRITONSERVER_MemoryType, int64_t>> alloc_preference;
+    alloc_preference = {{TRITONSERVER_MEMORY_CPU, 0}};
 
     const char* input_buffer;
     size_t batchn_byte_size;
     TRITONSERVER_MemoryType memory_type;
     int64_t memory_type_id;
-    TfLiteTensor* tflite_input_tensor =
+    TfLiteTensor* litert_input_tensor =
         interpreter_->tensor(model_state_->input_index_map_[input_name]);
-    char* tflite_input_buffer = tflite_input_tensor->data.raw;
+    char* litert_input_buffer = litert_input_tensor->data.raw;
 
     // Here we use ProcessTensor to copy the data from triton into the buffer
-    // allocated by the tflite interpreter. I don't believe the data copy can be
-    // avoided using the tflite runtime
+    // allocated by the LiteRT interpreter.
     RESPOND_ALL_AND_RETURN_IF_ERROR(
         responses, request_count,
         collector->ProcessTensor(
-            input_name, tflite_input_buffer, tflite_input_tensor->bytes,
-            alloc_perference, &input_buffer, &batchn_byte_size, &memory_type,
+            input_name, litert_input_buffer, litert_input_tensor->bytes,
+            alloc_preference, &input_buffer, &batchn_byte_size, &memory_type,
             &memory_type_id));
   }
 
@@ -1256,11 +1026,11 @@ ModelInstanceState::ReadOutputTensors(
     std::string output_name = map_entry.first;
     int tensor_index = map_entry.second;
 
-    TfLiteTensor* tflite_output_tensor = interpreter_->tensor(tensor_index);
+    TfLiteTensor* litert_output_tensor = interpreter_->tensor(tensor_index);
 
     // Verify output datatype matches datatype from model config
     TRITONSERVER_DataType output_dtype =
-        ConvertTFLiteTypeToDataType(tflite_output_tensor->type);
+        ConvertLiteRTTypeToDataType(litert_output_tensor->type);
     TRITONSERVER_DataType config_datatype =
         model_state_->output_dtype_map_[output_name];
     if (config_datatype != output_dtype) {
@@ -1277,11 +1047,11 @@ ModelInstanceState::ReadOutputTensors(
 
     // Assign data pointer to head of data container for output tensor
     const char* output_buffer =
-        static_cast<const char*>(tflite_output_tensor->data.raw);
+        static_cast<const char*>(litert_output_tensor->data.raw);
 
     // Set output shape
     std::vector<int64_t> batchn_shape;
-    TfLiteIntArray* dims = tflite_output_tensor->dims;
+    TfLiteIntArray* dims = litert_output_tensor->dims;
     for (int32_t i = 0; i < dims->size; i++) {
       batchn_shape.push_back(dims->data[i]);
     }
@@ -1298,8 +1068,6 @@ ModelInstanceState::ReadOutputTensors(
 /////////////
 
 extern "C" {
-
-int32_t armnn_threads = INT_MAX;
 
 TRITONSERVER_Error*
 TRITONBACKEND_Initialize(TRITONBACKEND_Backend* backend)
@@ -1366,7 +1134,7 @@ TRITONBACKEND_ModelInitialize(TRITONBACKEND_Model* model)
   // Create a ModelState object and associate it with the
   // TRITONBACKEND_Model.
   ModelState* model_state;
-  RETURN_IF_ERROR(ModelState::Create(model, &model_state, &armnn_threads));
+  RETURN_IF_ERROR(ModelState::Create(model, &model_state));
   RETURN_IF_ERROR(
       TRITONBACKEND_ModelSetState(model, reinterpret_cast<void*>(model_state)));
 
@@ -1488,4 +1256,4 @@ TRITONBACKEND_ModelInstanceExecute(
 
 }  // extern "C"
 
-}}}  // namespace triton::backend::tensorflowlite
+}}}  // namespace triton::backend::litert

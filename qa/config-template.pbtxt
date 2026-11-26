@@ -1,5 +1,5 @@
 name: "{{ model.name }}"
-backend: "armnn_tflite"
+backend: "litert"
 max_batch_size: {{ model.max_batch_size }}
 input [
     {% for input in model.inputs %}
@@ -25,11 +25,11 @@ output [
 
 ]
 
-{% if model.tflite_num_threads %}
+{% if model.litert_num_threads %}
 parameters: {
-key: "tflite_num_threads"
+key: "litert_num_threads"
 value: {
-string_value:"{{ model.tflite_num_threads }}"
+string_value:"{{ model.litert_num_threads }}"
 }
 }
 {% endif %}
@@ -51,31 +51,11 @@ instance_group [
     }
     {% endif %}
 ]
-{% if model.armnn_cpu or model.armnn_gpu %}
+{% if model.edgetpu %}
 optimization { execution_accelerators {
-    {% if model.armnn_cpu %}
-    cpu_execution_accelerator : [ {
-    name : "armnn"
-    {% for k,v in model.armnn_cpu_parameters.items() %}
-    parameters { key: "{{k}}" value: "{{v}}" }
-    {% endfor %}
-    }]
-    {% endif %}
-    {% if model.armnn_gpu %}
-    gpu_execution_accelerator : [ {
-    name : "armnn"
-    {% for k,v in model.armnn_gpu_parameters.items() %}
-    parameters { key: "{{k}}" value: "{{v}}" }
-    {% endfor %}
-    }]
-    {% endif %}
-}}
-{% endif %}
-{% if model.xnnpack and (not model.armnn_cpu) %}
-optimization { execution_accelerators {
-    cpu_execution_accelerator : [ {
-    name : "xnnpack"
-    {% for k,v in model.xnnpack_parameters.items() %}
+    tpu_execution_accelerator : [ {
+    name : "edgetpu"
+    {% for k,v in model.edgetpu_parameters.items() %}
     parameters { key: "{{k}}" value: "{{v}}" }
     {% endfor %}
     }]
@@ -101,4 +81,3 @@ model_warmup [
 }
 ]
 {% endif %}
-

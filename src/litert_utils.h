@@ -5,12 +5,15 @@
 #pragma once
 
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "tensorflow/lite/model.h"
+#include "tflite/model.h"
 
 #include "triton/core/tritonserver.h"
 
-namespace triton { namespace backend { namespace tensorflowlite {
+namespace triton { namespace backend { namespace litert {
 
 #define RESPOND_ALL_AND_RETURN_IF_ERROR(RESPONSES, RESPONSES_COUNT, X) \
   do {                                                                 \
@@ -21,10 +24,10 @@ namespace triton { namespace backend { namespace tensorflowlite {
     }                                                                  \
   } while (false)
 
-TRITONSERVER_DataType ConvertTFLiteTypeToDataType(const TfLiteType ttype);
-std::pair<bool, TfLiteType> ConvertDataTypeToTFLiteType(
+TRITONSERVER_DataType ConvertLiteRTTypeToDataType(const TfLiteType ttype);
+std::pair<bool, TfLiteType> ConvertDataTypeToLiteRTType(
     const TRITONSERVER_DataType dtype);
-std::pair<bool, TfLiteType> ModelConfigDataTypeToTFLiteType(
+std::pair<bool, TfLiteType> ModelConfigDataTypeToLiteRTType(
     const std::string& data_type_str);
 
 template <typename T, typename A>
@@ -41,4 +44,4 @@ VectorToString(std::vector<T, A> const& v)
   return ss.str();
 }
 
-}}}  // namespace triton::backend::tensorflowlite
+}}}  // namespace triton::backend::litert

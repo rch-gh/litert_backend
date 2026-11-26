@@ -10,12 +10,12 @@ from typing import List
 
 from itertools import product
 
-from helpers.triton_model_config import Model, TFLiteTritonModel
+from helpers.triton_model_config import Model, LiteRTTritonModel
 from helpers.helper_functions import is_server_ready, send_inference_request
 
 
 def basic_test(
-    model_config: TFLiteTritonModel,
+    model_config: LiteRTTritonModel,
     tritonserver_client,
     input_value: List,
     expected: List,
@@ -42,14 +42,11 @@ def basic_test(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "add",
             [Model.TensorIO("X_input", "TYPE_FP32", [1])],
             [Model.TensorIO("ADD_TOP", "TYPE_FP32", [1])],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for armnn_on, xnnpack_on in list(product([True, False], repeat=2))
     ],
 )
 @pytest.mark.parametrize(
@@ -73,14 +70,11 @@ def test_add(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "conv2d",
             [Model.TensorIO("input", "TYPE_FP32", [1, 5, 5, 1])],
             [Model.TensorIO("output", "TYPE_FP32", [1, 3, 3, 1])],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for armnn_on, xnnpack_on in list(product([True, False], repeat=2))
     ],
 )
 @pytest.mark.parametrize(

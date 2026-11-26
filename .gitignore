@@ -1,5 +1,6 @@
-/build
-/install
+build/
+build*/
+install/
 /.vscode
 *.so
 **/__pycache__

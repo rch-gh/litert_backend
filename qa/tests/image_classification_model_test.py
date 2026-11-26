@@ -9,7 +9,7 @@ from itertools import product, combinations
 
 from tritonclient.utils import InferenceServerException
 
-from helpers.triton_model_config import Model, TFLiteTritonModel
+from helpers.triton_model_config import Model, LiteRTTritonModel
 from helpers.image_helper import extract_photo, image_set_generator
 from helpers.helper_functions import is_server_ready
 
@@ -119,7 +119,7 @@ def classification_net(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "mobilenet_v3_large_100_224",
             [Model.TensorIO("serving_default_inputs:0", "TYPE_FP32", [224, 224, 3])],
             [
@@ -131,13 +131,8 @@ def classification_net(
                 )
             ],
             max_batch_size=max_batch_size,
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for (armnn_on, xnnpack_on, max_batch_size) in list(
-            product([True, False], [True, False], range(1, 4))
-        )
-        if not (xnnpack_on and armnn_on)
+        for max_batch_size in range(1, 4)
     ],
 )
 @pytest.mark.parametrize(
@@ -171,7 +166,7 @@ def test_mobilenetv3(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "mobilenet_v1_1.0_224",
             [Model.TensorIO("input", "TYPE_FP32", [1, 224, 224, 3])],
             [
@@ -182,11 +177,7 @@ def test_mobilenetv3(
                     label_filename="labels.txt",
                 )
             ],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for (armnn_on, xnnpack_on) in list(product([True, False], [True, False]))
-        if not (xnnpack_on and armnn_on)
     ],
 )
 @pytest.mark.parametrize(
@@ -220,7 +211,7 @@ def test_mobilenetv1(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "mobilenet_v2_1.0_224",
             [Model.TensorIO("input", "TYPE_FP32", [1, 224, 224, 3])],
             [
@@ -231,11 +222,7 @@ def test_mobilenetv1(
                     label_filename="labels.txt",
                 )
             ],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for (armnn_on, xnnpack_on) in list(product([True, False], [True, False]))
-        if not (xnnpack_on and armnn_on)
     ],
 )
 @pytest.mark.parametrize(
@@ -269,7 +256,7 @@ def test_mobilenetv2(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "inceptionv3",
             [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
             [
@@ -280,11 +267,7 @@ def test_mobilenetv2(
                     label_filename="labels.txt",
                 )
             ],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for (armnn_on, xnnpack_on) in list(product([True, False], [True, False]))
-        if not (xnnpack_on and armnn_on)
     ],
 )
 @pytest.mark.parametrize(
@@ -318,7 +301,7 @@ def test_inceptionv3(
 @pytest.mark.parametrize(
     "model_config",
     [
-        TFLiteTritonModel(
+        LiteRTTritonModel(
             "resnet_v2_101_fp32",
             [Model.TensorIO("input", "TYPE_FP32", [1, 299, 299, 3])],
             [
@@ -326,11 +309,7 @@ def test_inceptionv3(
                     "output", "TYPE_FP32", [1, 1001], label_filename="labels.txt"
                 )
             ],
-            armnn_cpu=armnn_on,
-            xnnpack=xnnpack_on,
         )
-        for (armnn_on, xnnpack_on) in list(product([True, False], [True, False]))
-        if not (xnnpack_on and armnn_on)
     ],
 )
 @pytest.mark.parametrize(
