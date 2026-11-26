@@ -52,14 +52,20 @@ instance_group [
     {% endif %}
 ]
 {% if model.edgetpu %}
-optimization { execution_accelerators {
-    tpu_execution_accelerator : [ {
-    name : "edgetpu"
-    {% for k,v in model.edgetpu_parameters.items() %}
-    parameters { key: "{{k}}" value: "{{v}}" }
-    {% endfor %}
-    }]
-}}
+parameters: {
+key: "edgetpu_enable"
+value: {
+string_value: "true"
+}
+}
+{% for k,v in model.edgetpu_parameters.items() %}
+parameters: {
+key: "edgetpu_{{k}}"
+value: {
+string_value: "{{v}}"
+}
+}
+{% endfor %}
 {% endif %}
 
 {% if model.warm_up %}

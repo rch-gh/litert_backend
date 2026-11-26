@@ -170,6 +170,61 @@ ModelState::LoadModel(
                   .c_str());
         }
       }
+
+      // Handle Coral Edge TPU parameters
+      err = GetParameterValue(params, "edgetpu_enable", &value_str);
+      if (err != nullptr) {
+        if (TRITONSERVER_ErrorCode(err) != TRITONSERVER_ERROR_NOT_FOUND) {
+          return err;
+        } else {
+          TRITONSERVER_ErrorDelete(err);
+        }
+      } else {
+        RETURN_IF_ERROR(ParseBoolValue(value_str, &use_edgetpu_delegate_));
+      }
+
+      err = GetParameterValue(params, "edgetpu_lib_path", &value_str);
+      if (err != nullptr) {
+        if (TRITONSERVER_ErrorCode(err) != TRITONSERVER_ERROR_NOT_FOUND) {
+          return err;
+        } else {
+          TRITONSERVER_ErrorDelete(err);
+        }
+      } else {
+        edgetpu_lib_path_ = value_str;
+      }
+
+      err = GetParameterValue(params, "edgetpu_device", &value_str);
+      if (err != nullptr) {
+        if (TRITONSERVER_ErrorCode(err) != TRITONSERVER_ERROR_NOT_FOUND) {
+          return err;
+        } else {
+          TRITONSERVER_ErrorDelete(err);
+        }
+      } else {
+        edgetpu_device_ = value_str;
+      }
+
+      err = GetParameterValue(params, "edgetpu_performance", &value_str);
+      if (err != nullptr) {
+        if (TRITONSERVER_ErrorCode(err) != TRITONSERVER_ERROR_NOT_FOUND) {
+          return err;
+        } else {
+          TRITONSERVER_ErrorDelete(err);
+        }
+      } else {
+        if (value_str == "Max" || value_str == "High" ||
+            value_str == "Medium" || value_str == "Low") {
+          edgetpu_performance_ = value_str;
+        } else {
+          return TRITONSERVER_ErrorNew(
+              TRITONSERVER_ERROR_INVALID_ARG,
+              (std::string("Please pass Max/High/Medium/Low for "
+                           "edgetpu_performance. '") +
+               value_str + "' is requested")
+                  .c_str());
+        }
+      }
     }
   }
 
@@ -191,71 +246,6 @@ ModelState::LoadModel(
                 (std::string("unknown CPU Execution Accelerator '") + name +
                  "' is requested")
                     .c_str());
-          }
-        }
-
-        triton::common::TritonJson::Value tpu_eas;
-        if (eas.Find("tpu_execution_accelerator", &tpu_eas)) {
-          for (size_t ea_idx = 0; ea_idx < tpu_eas.ArraySize(); ea_idx++) {
-            triton::common::TritonJson::Value ea;
-            RETURN_IF_ERROR(tpu_eas.IndexAsObject(ea_idx, &ea));
-            std::string name;
-            RETURN_IF_ERROR(ea.MemberAsString("name", &name));
-
-            if (name == "edgetpu") {
-              use_edgetpu_delegate_ = true;
-              LOG_MESSAGE(
-                  TRITONSERVER_LOG_VERBOSE,
-                  (std::string(
-                       "Coral Edge TPU Delegate Execution Accelerator is set for '") +
-                   Name() + "' on TPU")
-                      .c_str());
-              // Validate and set parameters
-              triton::common::TritonJson::Value params;
-              if (ea.Find("parameters", &params)) {
-                std::vector<std::string> param_keys;
-                RETURN_IF_ERROR(params.Members(&param_keys));
-                for (const auto& param_key : param_keys) {
-                  std::string value_string;
-                  if (param_key == "lib_path") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    edgetpu_lib_path_ = value_string;
-                  } else if (param_key == "device") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    edgetpu_device_ = value_string;
-                  } else if (param_key == "performance") {
-                    RETURN_IF_ERROR(params.MemberAsString(
-                        param_key.c_str(), &value_string));
-                    if (value_string == "Max" || value_string == "High" ||
-                        value_string == "Medium" || value_string == "Low") {
-                      edgetpu_performance_ = value_string;
-                    } else {
-                      RETURN_ERROR_IF_FALSE(
-                          false, TRITONSERVER_ERROR_INVALID_ARG,
-                          std::string(
-                              "Please pass Max/High/Medium/Low for "
-                              "performance. '") +
-                              value_string + "' is requested");
-                    }
-                  } else {
-                    return TRITONSERVER_ErrorNew(
-                        TRITONSERVER_ERROR_INVALID_ARG,
-                        std::string(
-                            "unknown parameter '" + param_key +
-                            "' is provided for Coral Edge TPU Acceleration")
-                            .c_str());
-                  }
-                }
-              }
-            } else {
-              return TRITONSERVER_ErrorNew(
-                  TRITONSERVER_ERROR_INVALID_ARG,
-                  (std::string("unknown TPU Execution Accelerator '") + name +
-                   "' is requested")
-                      .c_str());
-            }
           }
         }
       }

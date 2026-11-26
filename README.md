@@ -17,11 +17,18 @@ Install build dependencies on Ubuntu 24.04:
 sudo apt-get update && sudo apt-get install -y rapidjson-dev gcc-13 g++-13 git
 ```
 
-To install the Coral Edge TPU runtime (`libedgetpu.so.1`):
+To install the Coral Edge TPU runtime (`libedgetpu.so.1`) — note that Google's legacy `packages.cloud.google.com/apt` Coral repository is deprecated — use the community-maintained [`feranick/libedgetpu`](https://github.com/feranick/libedgetpu) releases (`.deb` packages for `amd64` / `arm64`):
+
+1. Download the `libedgetpu1-std` (or `libedgetpu1-max`) `.deb` package for your architecture from [github.com/feranick/libedgetpu/releases](https://github.com/feranick/libedgetpu/releases) and install it:
 ```bash
-echo "deb https://packages.cloud.google.com/apt coral-edgetpu-stable main" | sudo tee /etc/apt/sources.list.d/coral-edgetpu.list
-curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/coral-edgetpu.gpg
-sudo apt-get update && sudo apt-get install -y libedgetpu1-std
+curl -fsSL -O https://github.com/feranick/libedgetpu/releases/download/<TAG>/libedgetpu1-std_<VERSION>_<ARCH>.deb
+sudo dpkg -i libedgetpu1-std_<VERSION>_<ARCH>.deb
+sudo ldconfig
+```
+
+2. Grant your user USB access permissions (`plugdev` group) and replug the USB Coral Edge TPU device:
+```bash
+sudo usermod -aG plugdev $USER
 ```
 
 ### Build Independently with CMake
@@ -62,7 +69,7 @@ litert-backend-model-repo
 
 ## Runtime Optimizations
 By default, the backend uses the standard LiteRT Interpreter without any accelerators.
-To accelerate quantized models on a [Google Coral Edge TPU](https://coral.ai/docs/accelerator/get-started/), use `tpu_execution_accelerator`.
+To accelerate quantized models on a [Google Coral Edge TPU](https://coral.ai/docs/accelerator/get-started/), enable it via model `parameters`.
 
 ### Default Optimization Options
 Optimization parameters for the default LiteRT interpreter can be passed using the `parameters` section of the model configuration.
@@ -79,22 +86,31 @@ parameters: {
 ```
 
 ### USB Coral Edge TPU Delegate Optimization Options
-To accelerate Edge TPU-compiled INT8 `.tflite` models on a USB Coral Edge TPU accelerator, configure the `edgetpu` execution accelerator under `tpu_execution_accelerator`:
+To accelerate Edge TPU-compiled INT8 `.tflite` models on a USB Coral Edge TPU accelerator, configure the `edgetpu_*` model `parameters`:
 ```protobuf
-optimization { execution_accelerators {
-  tpu_execution_accelerator : [ {
-    name : "edgetpu"
-    parameters { key: "device" value: "usb" }
-    parameters { key: "lib_path" value: "libedgetpu.so.1" }
-    parameters { key: "performance" value: "Max" }
-  }]
-}}
+parameters: {
+  key: "edgetpu_enable"
+  value: { string_value: "true" }
+}
+parameters: {
+  key: "edgetpu_device"
+  value: { string_value: "usb" }
+}
+parameters: {
+  key: "edgetpu_lib_path"
+  value: { string_value: "libedgetpu.so.1" }
+}
+parameters: {
+  key: "edgetpu_performance"
+  value: { string_value: "Max" }
+}
 ```
 
-Available `edgetpu` parameters (all optional):
-* `device`: Edge TPU device specifier (default: `"usb"`). Examples: `"usb"`, `"usb:0"`, `"usb:1"`, `"pci"`, `"pci:0"`.
-* `lib_path`: Path or shared library name for the Edge TPU delegate (default: `"libedgetpu.so.1"`).
-* `performance`: Clock performance mode (`"Max"`, `"High"`, `"Medium"`, or `"Low"`).
+Available Edge TPU parameters:
+* `edgetpu_enable`: Set to `"true"` to enable the Coral Edge TPU delegate (default: `"false"`).
+* `edgetpu_device`: Optional Edge TPU device specifier (default: `"usb"`). Examples: `"usb"`, `"usb:0"`, `"usb:1"`, `"pci"`, `"pci:0"`.
+* `edgetpu_lib_path`: Optional path or shared library name for the Edge TPU delegate (default: `"libedgetpu.so.1"`).
+* `edgetpu_performance`: Optional clock performance mode (`"Max"`, `"High"`, `"Medium"`, or `"Low"`).
 
 When running inside Docker with a USB Coral Edge TPU, pass the USB bus device to the container:
 ```bash
